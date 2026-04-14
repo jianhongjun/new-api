@@ -78,24 +78,46 @@ func GetTopUpInfo(c *gin.Context) {
 		}
 	}
 
+	enableWechatNative := setting.WechatPayNativeEnabled && setting.WechatPayNativeReady()
+	if enableWechatNative {
+		hasWechat := false
+		for _, method := range payMethods {
+			if method["type"] == PaymentMethodWechatNative {
+				hasWechat = true
+				break
+			}
+		}
+		if !hasWechat {
+			wxMethod := map[string]string{
+				"name":      "微信支付（Native）",
+				"type":      PaymentMethodWechatNative,
+				"color":     "rgba(var(--semi-green-5), 1)",
+				"min_topup": strconv.FormatInt(getWechatPayMinTopup(), 10),
+			}
+			payMethods = append(payMethods, wxMethod)
+		}
+	}
+
 	data := gin.H{
-		"enable_online_topup": operation_setting.PayAddress != "" && operation_setting.EpayId != "" && operation_setting.EpayKey != "",
-		"enable_stripe_topup": setting.StripeApiSecret != "" && setting.StripeWebhookSecret != "" && setting.StripePriceId != "",
-		"enable_creem_topup":  setting.CreemApiKey != "" && setting.CreemProducts != "[]",
-		"enable_waffo_topup": enableWaffo,
+		"enable_online_topup":        operation_setting.PayAddress != "" && operation_setting.EpayId != "" && operation_setting.EpayKey != "",
+		"enable_stripe_topup":        setting.StripeApiSecret != "" && setting.StripeWebhookSecret != "" && setting.StripePriceId != "",
+		"enable_creem_topup":         setting.CreemApiKey != "" && setting.CreemProducts != "[]",
+		"enable_waffo_topup":         enableWaffo,
+		"enable_wechat_native_topup": enableWechatNative,
+		"wechat_native_min_topup":    strconv.FormatInt(getWechatPayMinTopup(), 10),
 		"waffo_pay_methods": func() interface{} {
 			if enableWaffo {
 				return setting.GetWaffoPayMethods()
 			}
 			return nil
 		}(),
-		"creem_products": setting.CreemProducts,
-		"pay_methods":         payMethods,
-		"min_topup":           operation_setting.MinTopUp,
-		"stripe_min_topup":    setting.StripeMinTopUp,
-		"waffo_min_topup":     setting.WaffoMinTopUp,
-		"amount_options":      operation_setting.GetPaymentSetting().AmountOptions,
-		"discount":            operation_setting.GetPaymentSetting().AmountDiscount,
+		"creem_products":   setting.CreemProducts,
+		"pay_methods":      payMethods,
+		"min_topup":        operation_setting.MinTopUp,
+		"stripe_min_topup": setting.StripeMinTopUp,
+		"waffo_min_topup":  setting.WaffoMinTopUp,
+		"amount_options":   operation_setting.GetPaymentSetting().AmountOptions,
+		"discount":         operation_setting.GetPaymentSetting().AmountDiscount,
 	}
 	common.ApiSuccess(c, data)
 }
@@ -463,4 +485,3 @@ func AdminCompleteTopUp(c *gin.Context) {
 	}
 	common.ApiSuccess(c, nil)
 }
-

@@ -39,6 +39,7 @@ import InvitationCard from './InvitationCard';
 import TransferModal from './modals/TransferModal';
 import PaymentConfirmModal from './modals/PaymentConfirmModal';
 import TopupHistoryModal from './modals/TopupHistoryModal';
+import { QRCodeSVG } from 'qrcode.react';
 
 const TopUp = () => {
   const { t } = useTranslation();
@@ -75,6 +76,10 @@ const TopUp = () => {
   const [enableWaffoTopUp, setEnableWaffoTopUp] = useState(false);
   const [waffoPayMethods, setWaffoPayMethods] = useState([]);
   const [waffoMinTopUp, setWaffoMinTopUp] = useState(1);
+  const [enableWechatNativeTopUp, setEnableWechatNativeTopUp] =
+    useState(false);
+  const [wechatQrOpen, setWechatQrOpen] = useState(false);
+  const [wechatCodeUrl, setWechatCodeUrl] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [open, setOpen] = useState(false);
@@ -162,6 +167,11 @@ const TopUp = () => {
         showError(t('管理员未开启Stripe充值！'));
         return;
       }
+    } else if (payment === 'wechat_native') {
+      if (!enableWechatNativeTopUp) {
+        showError(t('管理员未开启微信 Native 充值'));
+        return;
+      }
     } else {
       if (!enableOnlineTopUp) {
         showError(t('管理员未开启在线充值！'));
@@ -216,6 +226,11 @@ const TopUp = () => {
           amount: parseInt(topUpCount),
           payment_method: 'stripe',
         });
+      } else if (payWay === 'wechat_native') {
+        res = await API.post('/api/user/wechatpay/pay', {
+          amount: parseInt(topUpCount),
+          payment_method: 'wechat_native',
+        });
       } else {
         // 普通支付请求
         res = await API.post('/api/user/pay', {
@@ -228,10 +243,15 @@ const TopUp = () => {
         const { message, data } = res.data;
         if (message === 'success') {
           if (payWay === 'stripe') {
-            // Stripe 支付回调处理
             window.open(data.pay_link, '_blank');
+          } else if (payWay === 'wechat_native') {
+            if (data?.code_url) {
+              setWechatCodeUrl(data.code_url);
+              setWechatQrOpen(true);
+            } else {
+              showError(t('支付失败'));
+            }
           } else {
-            // 普通支付表单提交
             let params = data;
             let url = res.data.url;
             let form = document.createElement('form');
@@ -456,11 +476,20 @@ const TopUp = () => {
                   method.min_topup = stripeMin;
                 }
               }
+              if (
+                method.type === 'wechat_native' &&
+                (!method.min_topup || method.min_topup <= 0)
+              ) {
+                const wxMin = Number(data.wechat_native_min_topup);
+                if (Number.isFinite(wxMin)) {
+                  method.min_topup = wxMin;
+                }
+              }
 
               if (!method.color) {
                 if (method.type === 'alipay') {
                   method.color = 'rgba(var(--semi-blue-5), 1)';
-                } else if (method.type === 'wxpay') {
+                } else if (method.type === 'wxpay' || method.type === 'wechat_native') {
                   method.color = 'rgba(var(--semi-green-5), 1)';
                 } else if (method.type === 'stripe') {
                   method.color = 'rgba(var(--semi-purple-5), 1)';
@@ -481,18 +510,34 @@ const TopUp = () => {
           const enableStripeTopUp = data.enable_stripe_topup || false;
           const enableOnlineTopUp = data.enable_online_topup || false;
           const enableCreemTopUp = data.enable_creem_topup || false;
-          const minTopUpValue = enableOnlineTopUp
-            ? data.min_topup
-            : enableStripeTopUp
-              ? data.stripe_min_topup
-              : data.enable_waffo_topup
-                ? data.waffo_min_topup
-                : 1;
+          const enableWaffoTopUp = data.enable_waffo_topup || false;
+          const enableWechatNativeTopUp =
+            data.enable_wechat_native_topup || false;
+          const minCandidates = [];
+          if (enableOnlineTopUp) {
+            const n = Number(data.min_topup);
+            if (Number.isFinite(n) && n > 0) minCandidates.push(n);
+          }
+          if (enableStripeTopUp) {
+            const n = Number(data.stripe_min_topup);
+            if (Number.isFinite(n) && n > 0) minCandidates.push(n);
+          }
+          if (enableWaffoTopUp) {
+            const n = Number(data.waffo_min_topup);
+            if (Number.isFinite(n) && n > 0) minCandidates.push(n);
+          }
+          if (enableWechatNativeTopUp) {
+            const n = Number(data.wechat_native_min_topup);
+            if (Number.isFinite(n) && n > 0) minCandidates.push(n);
+          }
+          const minTopUpValue = minCandidates.length
+            ? Math.min(...minCandidates)
+            : 1;
           setEnableOnlineTopUp(enableOnlineTopUp);
           setEnableStripeTopUp(enableStripeTopUp);
           setEnableCreemTopUp(enableCreemTopUp);
-          const enableWaffoTopUp = data.enable_waffo_topup || false;
           setEnableWaffoTopUp(enableWaffoTopUp);
+          setEnableWechatNativeTopUp(enableWechatNativeTopUp);
           setWaffoPayMethods(data.waffo_pay_methods || []);
           setWaffoMinTopUp(data.waffo_min_topup || 1);
           setMinTopUp(minTopUpValue);
@@ -744,6 +789,27 @@ const TopUp = () => {
         discountRate={topupInfo?.discount?.[topUpCount] || 1.0}
       />
 
+      <Modal
+        title={t('微信扫码支付')}
+        visible={wechatQrOpen}
+        onCancel={() => {
+          setWechatQrOpen(false);
+          setWechatCodeUrl('');
+        }}
+        footer={null}
+        centered
+        maskClosable
+      >
+        <div className='flex flex-col items-center gap-4 py-2'>
+          {wechatCodeUrl ? (
+            <QRCodeSVG value={wechatCodeUrl} size={220} level='M' />
+          ) : null}
+          <p className='text-center text-slate-600 dark:text-slate-300 text-sm'>
+            {t('请使用微信扫一扫完成支付。支付成功后额度将自动到账；若长时间未到账，请刷新页面或查看账单。')}
+          </p>
+        </div>
+      </Modal>
+
       {/* 充值账单模态框 */}
       <TopupHistoryModal
         visible={openHistory}
@@ -789,6 +855,7 @@ const TopUp = () => {
           creemProducts={creemProducts}
           creemPreTopUp={creemPreTopUp}
           enableWaffoTopUp={enableWaffoTopUp}
+          enableWechatNativeTopUp={enableWechatNativeTopUp}
           waffoTopUp={waffoTopUp}
           waffoPayMethods={waffoPayMethods}
           presetAmounts={presetAmounts}
