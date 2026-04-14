@@ -90,6 +90,8 @@ const TopUp = () => {
   const [payMethods, setPayMethods] = useState([]);
 
   const affFetchedRef = useRef(false);
+  /** 微信 Native 下单返回的 trade_no，用于轮询订单是否已支付成功 */
+  const wechatTradeNoRef = useRef('');
 
   // 邀请相关状态
   const [affLink, setAffLink] = useState('');
@@ -246,6 +248,7 @@ const TopUp = () => {
             window.open(data.pay_link, '_blank');
           } else if (payWay === 'wechat_native') {
             if (data?.code_url) {
+              wechatTradeNoRef.current = data.trade_no || '';
               setWechatCodeUrl(data.code_url);
               setWechatQrOpen(true);
             } else {
@@ -625,6 +628,39 @@ const TopUp = () => {
     }
   }, []);
 
+  // 微信 Native：支付成功后自动关闭二维码并刷新账户额度
+  useEffect(() => {
+    if (!wechatQrOpen) return;
+    const tradeNo = wechatTradeNoRef.current;
+    if (!tradeNo) return;
+    const deadline = Date.now() + 15 * 60 * 1000;
+    let intervalId;
+    const poll = async () => {
+      if (Date.now() > deadline) {
+        clearInterval(intervalId);
+        return;
+      }
+      try {
+        const res = await API.get(
+          `/api/user/wechatpay/order?trade_no=${encodeURIComponent(tradeNo)}`,
+        );
+        if (res.data?.success && res.data?.data?.status === 'success') {
+          clearInterval(intervalId);
+          wechatTradeNoRef.current = '';
+          setWechatQrOpen(false);
+          setWechatCodeUrl('');
+          await getUserQuota();
+          showSuccess(t('微信支付成功，余额已更新'));
+        }
+      } catch (_) {
+        // 轮询忽略瞬时网络错误
+      }
+    };
+    intervalId = setInterval(poll, 2000);
+    void poll();
+    return () => clearInterval(intervalId);
+  }, [wechatQrOpen]);
+
   useEffect(() => {
     // 始终获取最新用户数据，确保余额等统计信息准确
     getUserQuota().then();
@@ -794,6 +830,7 @@ const TopUp = () => {
         title={t('微信扫码支付')}
         visible={wechatQrOpen}
         onCancel={() => {
+          wechatTradeNoRef.current = '';
           setWechatQrOpen(false);
           setWechatCodeUrl('');
         }}

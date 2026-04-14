@@ -1585,6 +1585,7 @@
     "支付": "Payer",
     "支付地址": "Adresse de paiement",
     "支付失败": "Paiement échoué",
+    "微信支付成功，余额已更新": "Paiement WeChat réussi. Solde mis à jour.",
     "支付宝": "Alipay",
     "支付方式": "Mode de paiement",
     "支付方式名称": "Nom de méthode de paiement",

@@ -1593,6 +1593,7 @@
     "支付": "Pay",
     "支付地址": "Payment address",
     "支付失败": "Payment failed",
+    "微信支付成功，余额已更新": "WeChat Pay successful. Your balance has been updated.",
     "支付宝": "Alipay",
     "支付方式": "Payment method",
     "支付方式名称": "Pay Method Name",

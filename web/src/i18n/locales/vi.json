@@ -1569,6 +1569,7 @@
     "支付": "Thanh toán",
     "支付地址": "Địa chỉ thanh toán",
     "支付失败": "Thanh toán thất bại",
+    "微信支付成功，余额已更新": "Thanh toán WeChat Pay thành công. Số dư đã được cập nhật.",
     "支付宝": "Alipay",
     "支付方式": "Phương thức thanh toán",
     "支付方式名称": "Tên phương thức thanh toán",
