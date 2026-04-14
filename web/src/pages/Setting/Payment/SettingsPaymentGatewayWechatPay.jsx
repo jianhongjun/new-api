@@ -136,7 +136,6 @@ export default function SettingsPaymentGatewayWechatPay(props) {
           value: String(inputs.WechatPayMinTopUp ?? 0),
         });
       }
-
       if (options.length === 0) {
         showSuccess(t('没有需要保存的变更'));
         setLoading(false);

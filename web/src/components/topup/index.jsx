@@ -570,6 +570,7 @@ const TopUp = () => {
           }));
           setPresetAmounts(customPresets);
         }
+
       } else {
         showError(data || t('获取充值配置失败'));
       }

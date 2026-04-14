@@ -18,7 +18,15 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Button, Form, Row, Col, Typography, Spin } from '@douyinfe/semi-ui';
+import {
+  Button,
+  Form,
+  Row,
+  Col,
+  Typography,
+  Spin,
+  Card,
+} from '@douyinfe/semi-ui';
 const { Text } = Typography;
 import {
   API,
@@ -33,6 +41,7 @@ export default function SettingsPaymentGateway(props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
+    OnlineTopUpEnabled: true,
     PayAddress: '',
     EpayId: '',
     EpayKey: '',
@@ -50,6 +59,10 @@ export default function SettingsPaymentGateway(props) {
   useEffect(() => {
     if (props.options && formApiRef.current) {
       const currentInputs = {
+        OnlineTopUpEnabled:
+          props.options.OnlineTopUpEnabled !== undefined
+            ? !!props.options.OnlineTopUpEnabled
+            : true,
         PayAddress: props.options.PayAddress || '',
         EpayId: props.options.EpayId || '',
         EpayKey: props.options.EpayKey || '',
@@ -95,8 +108,17 @@ export default function SettingsPaymentGateway(props) {
   }, [props.options]);
 
   const handleFormChange = (values) => {
-    setInputs(values);
+    // Form 默认 allowEmpty=false 时，false 的开关可能不出现在 values 里，不能直接 setInputs(values) 否则会丢掉 OnlineTopUpEnabled
+    setInputs((prev) => ({ ...prev, ...values }));
   };
+
+  // 禁用易支付连接三字段及「充值方式设置」（仅易支付渠道）；价格、回调、分组倍率、数量/折扣等为公用，不受此开关影响
+  const epayOn =
+    inputs.OnlineTopUpEnabled === true ||
+    inputs.OnlineTopUpEnabled === 'true' ||
+    inputs.OnlineTopUpEnabled === 1 ||
+    inputs.OnlineTopUpEnabled === '1';
+  const epayConnectionDisabled = !epayOn;
 
   const submitPayAddress = async () => {
     if (props.options.ServerAddress === '') {
@@ -143,6 +165,13 @@ export default function SettingsPaymentGateway(props) {
       const options = [
         { key: 'PayAddress', value: removeTrailingSlash(inputs.PayAddress) },
       ];
+
+      if (originInputs['OnlineTopUpEnabled'] !== inputs.OnlineTopUpEnabled) {
+        options.push({
+          key: 'OnlineTopUpEnabled',
+          value: inputs.OnlineTopUpEnabled ? 'true' : 'false',
+        });
+      }
 
       if (inputs.EpayId !== '') {
         options.push({ key: 'EpayId', value: inputs.EpayId });
@@ -212,117 +241,145 @@ export default function SettingsPaymentGateway(props) {
   return (
     <Spin spinning={loading}>
       <Form
+        allowEmpty
         initValues={inputs}
         onValueChange={handleFormChange}
         getFormApi={(api) => (formApiRef.current = api)}
       >
         <Form.Section text={t('支付设置')}>
-          <Text>
-            {t(
-              '（当前仅支持易支付接口，默认使用上方服务器地址作为回调地址！）',
-            )}
-          </Text>
-          <Row gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}>
-            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
-              <Form.Input
-                field='PayAddress'
-                label={t('支付地址')}
-                placeholder={t('例如：https://yourdomain.com')}
-              />
-            </Col>
-            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
-              <Form.Input
-                field='EpayId'
-                label={t('易支付商户ID')}
-                placeholder={t('例如：0001')}
-              />
-            </Col>
-            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
-              <Form.Input
-                field='EpayKey'
-                label={t('易支付商户密钥')}
-                placeholder={t('敏感信息不会发送到前端显示')}
-                type='password'
-              />
-            </Col>
-          </Row>
-          <Row
-            gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
-            style={{ marginTop: 16 }}
+          <Card
+            title={t('易支付（通用充值）')}
+            style={{ marginBottom: 16 }}
+            bodyStyle={{ paddingBottom: 8 }}
           >
-            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
-              <Form.Input
-                field='CustomCallbackAddress'
-                label={t('回调地址')}
-                placeholder={t('例如：https://yourdomain.com')}
-              />
-            </Col>
-            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
-              <Form.InputNumber
-                field='Price'
-                precision={2}
-                label={t('充值价格（x元/美金）')}
-                placeholder={t('例如：7，就是7元/美金')}
-              />
-            </Col>
-            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
-              <Form.InputNumber
-                field='MinTopUp'
-                label={t('最低充值美元数量')}
-                placeholder={t('例如：2，就是最低充值2$')}
-              />
-            </Col>
-          </Row>
-          <Form.TextArea
-            field='TopupGroupRatio'
-            label={t('充值分组倍率')}
-            placeholder={t('为一个 JSON 文本，键为组名称，值为倍率')}
-            autosize
-          />
-          <Form.TextArea
-            field='PayMethods'
-            label={t('充值方式设置')}
-            placeholder={t('为一个 JSON 文本')}
-            autosize
-          />
+            <Form.Switch
+              field='OnlineTopUpEnabled'
+              label={t('启用通用充值（易支付）')}
+              extraText={t(
+                '关闭后用户端不可用易支付（支付宝/微信通道等），其它支付方式不受影响。',
+              )}
+            />
+            <Text>
+              {t(
+                '（当前仅支持易支付接口，默认使用上方服务器地址作为回调地址！）',
+              )}
+            </Text>
+            <Row
+              gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
+              style={{ marginTop: 12 }}
+            >
+              <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+                <Form.Input
+                  field='PayAddress'
+                  label={t('支付地址')}
+                  placeholder={t('例如：https://yourdomain.com')}
+                  disabled={epayConnectionDisabled}
+                />
+              </Col>
+              <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+                <Form.Input
+                  field='EpayId'
+                  label={t('易支付商户ID')}
+                  placeholder={t('例如：0001')}
+                  disabled={epayConnectionDisabled}
+                />
+              </Col>
+              <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+                <Form.Input
+                  field='EpayKey'
+                  label={t('易支付商户密钥')}
+                  placeholder={t('敏感信息不会发送到前端显示')}
+                  type='password'
+                  disabled={epayConnectionDisabled}
+                />
+              </Col>
+            </Row>
+            <Form.TextArea
+              field='PayMethods'
+              label={t('充值方式设置')}
+              placeholder={t('为一个 JSON 文本')}
+              autosize
+              disabled={epayConnectionDisabled}
+              extraText={t(
+                '仅用于易支付（支付宝/微信等通道类型）；关闭「通用充值」时不可编辑。',
+              )}
+            />
+          </Card>
 
-          <Row
-            gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
-            style={{ marginTop: 16 }}
+          <Card
+            title={t('充值共用设置')}
+            style={{ marginBottom: 16 }}
+            bodyStyle={{ paddingBottom: 8 }}
           >
-            <Col span={24}>
-              <Form.TextArea
-                field='AmountOptions'
-                label={t('自定义充值数量选项')}
-                placeholder={t(
-                  '为一个 JSON 数组，例如：[10, 20, 50, 100, 200, 500]',
-                )}
-                autosize
-                extraText={t(
-                  '设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]',
-                )}
-              />
-            </Col>
-          </Row>
+            <Row gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}>
+              <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+                <Form.Input
+                  field='CustomCallbackAddress'
+                  label={t('回调地址')}
+                  placeholder={t('例如：https://yourdomain.com')}
+                />
+              </Col>
+              <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  field='Price'
+                  precision={2}
+                  label={t('充值价格（x元/美金）')}
+                  placeholder={t('例如：7，就是7元/美金')}
+                />
+              </Col>
+              <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  field='MinTopUp'
+                  label={t('最低充值美元数量')}
+                  placeholder={t('例如：2，就是最低充值2$')}
+                />
+              </Col>
+            </Row>
+            <Form.TextArea
+              field='TopupGroupRatio'
+              label={t('充值分组倍率')}
+              placeholder={t('为一个 JSON 文本，键为组名称，值为倍率')}
+              autosize
+            />
 
-          <Row
-            gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
-            style={{ marginTop: 16 }}
-          >
-            <Col span={24}>
-              <Form.TextArea
-                field='AmountDiscount'
-                label={t('充值金额折扣配置')}
-                placeholder={t(
-                  '为一个 JSON 对象，例如：{"100": 0.95, "200": 0.9, "500": 0.85}',
-                )}
-                autosize
-                extraText={t(
-                  '设置不同充值金额对应的折扣，键为充值金额，值为折扣率，例如：{"100": 0.95, "200": 0.9, "500": 0.85}',
-                )}
-              />
-            </Col>
-          </Row>
+            <Row
+              gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
+              style={{ marginTop: 16 }}
+            >
+              <Col span={24}>
+                <Form.TextArea
+                  field='AmountOptions'
+                  label={t('自定义充值数量选项')}
+                  placeholder={t(
+                    '为一个 JSON 数组，例如：[10, 20, 50, 100, 200, 500]',
+                  )}
+                  autosize
+                  extraText={t(
+                    '设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]',
+                  )}
+                />
+              </Col>
+            </Row>
+
+            <Row
+              gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
+              style={{ marginTop: 16 }}
+            >
+              <Col span={24}>
+                <Form.TextArea
+                  field='AmountDiscount'
+                  label={t('充值金额折扣配置')}
+                  placeholder={t(
+                    '为一个 JSON 对象，例如：{"100": 0.95, "200": 0.9, "500": 0.85}',
+                  )}
+                  autosize
+                  extraText={t(
+                    '设置不同充值金额对应的折扣，键为充值金额，值为折扣率，例如：{"100": 0.95, "200": 0.9, "500": 0.85}',
+                  )}
+                />
+              </Col>
+            </Row>
+          </Card>
 
           <Button onClick={submitPayAddress}>{t('更新支付设置')}</Button>
         </Form.Section>

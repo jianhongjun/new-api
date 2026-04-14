@@ -32,6 +32,7 @@ const PaymentSetting = () => {
   const { t } = useTranslation();
   let [inputs, setInputs] = useState({
     ServerAddress: '',
+    OnlineTopUpEnabled: true,
     PayAddress: '',
     EpayId: '',
     EpayKey: '',
