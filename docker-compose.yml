@@ -18,7 +18,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # 若构建阶段 apt 报 GPG「invalid signature」：取消下行注释，或改用清华/华为等镜像 HTTP 地址
+      # Dockerfile 会从 Alpine 注入 CA 并把常见源 http→https；仍失败多为 HTTPS 被公司解密，需导入企业根证书或换源域名。
       args:
         DEBIAN_APT_DEB: "http://mirrors.aliyun.com/debian"
         DEBIAN_APT_SEC: "http://mirrors.aliyun.com/debian-security"
