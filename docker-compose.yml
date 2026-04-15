@@ -18,23 +18,26 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # 若构建阶段 apt 报 GPG「invalid signature」：取消下行注释，或改用清华/华为等镜像 HTTP 地址
+      args:
+        DEBIAN_APT_DEB: "http://mirrors.aliyun.com/debian"
+        DEBIAN_APT_SEC: "http://mirrors.aliyun.com/debian-security"
     image: new-api:local
     container_name: new-api
     restart: always
     command: --log-dir /app/logs
     # 访问宿主机上的 PostgreSQL / Redis：容器内不能用 127.0.0.1（那是容器自己）。
     # host.docker.internal 解析到宿主机；Linux 需配合下方 extra_hosts。
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+
     ports:
       - "3000:3000"
     volumes:
       - ./data:/data
       - ./logs:/app/logs
     environment:
-#      - SQL_DSN=postgresql://root:123456@host.docker.internal:5432/new-api # ⚠️ IMPORTANT: Change the password in production!
+      # - SQL_DSN=postgresql://root:123456@host.docker.internal:5432/new-api # ⚠️ IMPORTANT: Change the password in production!
 #      - SQL_DSN=root:123456@tcp(mysql:3306)/new-api  # Point to the mysql service, uncomment if using MySQL
-#      - REDIS_CONN_STRING=redis://host.docker.internal:6379
+      # - REDIS_CONN_STRING=redis://host.docker.internal:6379
       - TZ=Asia/Shanghai
       - ERROR_LOG_ENABLED=true # 是否启用错误日志记录 (Whether to enable error log recording)
       - BATCH_UPDATE_ENABLED=true  # 是否启用批量更新 (Whether to enable batch update)
