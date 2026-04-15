@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState, useContext, useRef } from 'react';
+import React, {
+  useEffect,
+  useState,
+  useContext,
+  useRef,
+  useMemo,
+} from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   API,
@@ -49,6 +55,8 @@ const TopUp = () => {
 
   const [redemptionCode, setRedemptionCode] = useState('');
   const [amount, setAmount] = useState(0.0);
+  /** Stripe 额度充值应付（美元），与易支付「元」分离 */
+  const [stripePayAmount, setStripePayAmount] = useState(0);
   const [minTopUp, setMinTopUp] = useState(statusState?.status?.min_topup || 1);
   const [topUpCount, setTopUpCount] = useState(
     statusState?.status?.min_topup || 1,
@@ -117,7 +125,33 @@ const TopUp = () => {
   const [topupInfo, setTopupInfo] = useState({
     amount_options: [],
     discount: {},
+    stripe_unit_price: undefined,
   });
+
+  /** Stripe 美元单价：优先全局 status，其次本页 topup/info，最后 localStorage */
+  const effectiveStripeUnitPrice = useMemo(() => {
+    const fromStatus = Number(statusState?.status?.stripe_unit_price);
+    if (Number.isFinite(fromStatus) && fromStatus > 0) {
+      return fromStatus;
+    }
+    const fromTopup = Number(topupInfo?.stripe_unit_price);
+    if (Number.isFinite(fromTopup) && fromTopup > 0) {
+      return fromTopup;
+    }
+    try {
+      const raw = localStorage.getItem('status');
+      if (raw) {
+        const s = JSON.parse(raw);
+        const fromLs = Number(s?.stripe_unit_price);
+        if (Number.isFinite(fromLs) && fromLs > 0) {
+          return fromLs;
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return 0;
+  }, [statusState?.status?.stripe_unit_price, topupInfo?.stripe_unit_price]);
 
   const topUp = async () => {
     if (redemptionCode === '') {
@@ -163,7 +197,7 @@ const TopUp = () => {
     window.open(topUpLink, '_blank');
   };
 
-  const preTopUp = async (payment) => {
+  const selectPayWay = async (payment) => {
     if (payment === 'stripe') {
       if (!enableStripeTopUp) {
         showError(t('管理员未开启Stripe充值！'));
@@ -182,18 +216,34 @@ const TopUp = () => {
     }
 
     setPayWay(payment);
+    setSelectedPreset(null);
     setPaymentLoading(true);
     try {
-      if (payment === 'stripe') {
-        await getStripeAmount();
-      } else {
-        await getAmount();
-      }
+      await refreshPayQuotes(topUpCount);
+    } catch (error) {
+      showError(t('获取金额失败'));
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
 
-      if (topUpCount < minTopUp) {
-        showError(t('充值数量不能小于') + minTopUp);
-        return;
-      }
+  /** 打开「充值确认」弹窗；quotaAmount 与当前输入一致时由调用方传入，避免闭包滞后 */
+  const openTopUpConfirm = async (quotaAmount) => {
+    const c =
+      quotaAmount != null && Number.isFinite(Number(quotaAmount))
+        ? Number(quotaAmount)
+        : Number(topUpCount);
+    if (!payWay) {
+      showError(t('请先选择支付方式'));
+      return;
+    }
+    if (!Number.isFinite(c) || c < minTopUp) {
+      showError(t('充值数量不能小于') + minTopUp);
+      return;
+    }
+    setPaymentLoading(true);
+    try {
+      await refreshPayQuotes(c);
       setOpen(true);
     } catch (error) {
       showError(t('获取金额失败'));
@@ -204,14 +254,12 @@ const TopUp = () => {
 
   const onlineTopUp = async () => {
     if (payWay === 'stripe') {
-      // Stripe 支付处理
-      if (amount === 0) {
-        await getStripeAmount();
+      if (!stripePayAmount) {
+        await refreshPayQuotes(topUpCount);
       }
     } else {
-      // 普通支付处理
-      if (amount === 0) {
-        await getAmount();
+      if (!amount) {
+        await refreshPayQuotes(topUpCount);
       }
     }
 
@@ -439,6 +487,62 @@ const TopUp = () => {
     }
   };
 
+  /** 拉取易支付/微信等（元）与 Stripe（美元）参考价；flags 用于 getTopupInfo 内避免闭包未更新 */
+  const fetchPayQuotes = async (value, flags) => {
+    const v = value ?? topUpCount;
+    const needEpay =
+      flags?.needEpay ??
+      (enableOnlineTopUp || enableWechatNativeTopUp || enableWaffoTopUp);
+    const needStripe = flags?.needStripe ?? enableStripeTopUp;
+    setAmountLoading(true);
+    try {
+      if (needEpay) {
+        try {
+          const res = await API.post('/api/user/amount', {
+            amount: parseFloat(v),
+          });
+          if (res !== undefined) {
+            const { message, data } = res.data;
+            if (message === 'success') {
+              setAmount(parseFloat(data));
+            } else {
+              setAmount(0);
+            }
+          }
+        } catch (_) {
+          setAmount(0);
+        }
+      } else {
+        setAmount(0);
+      }
+      if (needStripe) {
+        try {
+          const res = await API.post('/api/user/stripe/amount', {
+            amount: parseFloat(v),
+          });
+          if (res !== undefined) {
+            const { message, data } = res.data;
+            if (message === 'success') {
+              setStripePayAmount(parseFloat(data));
+            } else {
+              setStripePayAmount(0);
+            }
+          }
+        } catch (_) {
+          setStripePayAmount(0);
+        }
+      } else {
+        setStripePayAmount(0);
+      }
+    } finally {
+      setAmountLoading(false);
+    }
+  };
+
+  const refreshPayQuotes = async (value) => {
+    await fetchPayQuotes(value, undefined);
+  };
+
   // 获取充值配置信息
   const getTopupInfo = async () => {
     try {
@@ -448,6 +552,7 @@ const TopUp = () => {
         setTopupInfo({
           amount_options: data.amount_options || [],
           discount: data.discount || {},
+          stripe_unit_price: data.stripe_unit_price,
         });
 
         // 处理支付方式
@@ -559,8 +664,13 @@ const TopUp = () => {
             setPresetAmounts(generatePresetAmounts(minTopUpValue));
           }
 
-          // 初始化显示实付金额
-          getAmount(minTopUpValue);
+          await fetchPayQuotes(minTopUpValue, {
+            needEpay:
+              enableOnlineTopUp ||
+              enableWechatNativeTopUp ||
+              enableWaffoTopUp,
+            needStripe: enableStripeTopUp,
+          });
         } catch (e) {
           setPayMethods([]);
         }
@@ -692,8 +802,35 @@ const TopUp = () => {
     }
   }, [statusState?.status]);
 
+  useEffect(() => {
+    const q = statusState?.status?.quota_display_type;
+    if (q == null || q === '') return;
+    try {
+      if (localStorage.getItem('quota_display_type') !== q) {
+        localStorage.setItem('quota_display_type', q);
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }, [statusState?.status?.quota_display_type]);
+
   const renderAmount = () => {
-    return amount + ' ' + t('元');
+    if (payWay === 'stripe') {
+      return `${Number(stripePayAmount || 0).toFixed(2)} USD`;
+    }
+    if (payWay && payWay !== 'stripe') {
+      return `${Number(amount || 0).toFixed(2)} ${t('元')}`;
+    }
+    const epayOn =
+      enableOnlineTopUp || enableWechatNativeTopUp || enableWaffoTopUp;
+    const stripeOn = enableStripeTopUp;
+    if (epayOn && stripeOn) {
+      return `${t('易支付（通用充值）')} ${Number(amount || 0).toFixed(2)} ${t('元')} · Stripe ${Number(stripePayAmount || 0).toFixed(2)} USD`;
+    }
+    if (stripeOn && !epayOn) {
+      return `${Number(stripePayAmount || 0).toFixed(2)} USD`;
+    }
+    return `${Number(amount || 0).toFixed(2)} ${t('元')}`;
   };
 
   const getAmount = async (value) => {
@@ -734,16 +871,17 @@ const TopUp = () => {
       if (res !== undefined) {
         const { message, data } = res.data;
         if (message === 'success') {
-          setAmount(parseFloat(data));
+          const n = parseFloat(data);
+          setStripePayAmount(n);
         } else {
-          setAmount(0);
-          Toast.error({ content: '错误：' + data, id: 'getAmount' });
+          setStripePayAmount(0);
+          Toast.error({ content: '错误：' + data, id: 'getStripeAmount' });
         }
       } else {
         showError(res);
       }
     } catch (err) {
-      // amount fetch failed silently
+      // stripe amount fetch failed silently
     } finally {
       setAmountLoading(false);
     }
@@ -771,14 +909,10 @@ const TopUp = () => {
   };
 
   // 选择预设充值额度
-  const selectPresetAmount = (preset) => {
+  const selectPresetAmount = async (preset) => {
     setTopUpCount(preset.value);
     setSelectedPreset(preset.value);
-
-    // 计算实际支付金额，考虑折扣
-    const discount = preset.discount || topupInfo.discount[preset.value] || 1.0;
-    const discountedAmount = preset.value * priceRatio * discount;
-    setAmount(discountedAmount);
+    await refreshPayQuotes(preset.value);
   };
 
   // 格式化大数字显示
@@ -817,12 +951,11 @@ const TopUp = () => {
         handleCancel={handleCancel}
         confirmLoading={confirmLoading}
         topUpCount={topUpCount}
-        renderQuotaWithAmount={renderQuotaWithAmount}
         amountLoading={amountLoading}
         renderAmount={renderAmount}
         payWay={payWay}
         payMethods={payMethods}
-        amountNumber={amount}
+        amountNumber={payWay === 'stripe' ? stripePayAmount : amount}
         discountRate={topupInfo?.discount?.[topUpCount] || 1.0}
       />
 
@@ -886,6 +1019,7 @@ const TopUp = () => {
       {/* 主布局区域 */}
       <div className='grid grid-cols-1 lg:grid-cols-2 gap-6'>
         <RechargeCard
+          key={statusState?.status?.quota_display_type || 'quota'}
           t={t}
           enableOnlineTopUp={enableOnlineTopUp}
           enableStripeTopUp={enableStripeTopUp}
@@ -904,15 +1038,17 @@ const TopUp = () => {
           topUpCount={topUpCount}
           minTopUp={minTopUp}
           renderQuotaWithAmount={renderQuotaWithAmount}
-          getAmount={getAmount}
+          refreshPayQuotes={refreshPayQuotes}
           setTopUpCount={setTopUpCount}
           setSelectedPreset={setSelectedPreset}
           renderAmount={renderAmount}
           amountLoading={amountLoading}
           payMethods={payMethods}
-          preTopUp={preTopUp}
+          selectPayWay={selectPayWay}
+          onOpenTopUpConfirm={openTopUpConfirm}
           paymentLoading={paymentLoading}
           payWay={payWay}
+          stripeUnitPrice={effectiveStripeUnitPrice}
           redemptionCode={redemptionCode}
           setRedemptionCode={setRedemptionCode}
           topUp={topUp}

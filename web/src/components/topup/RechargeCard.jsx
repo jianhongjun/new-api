@@ -67,13 +67,14 @@ const RechargeCard = ({
   topUpCount,
   minTopUp,
   renderQuotaWithAmount,
-  getAmount,
+  refreshPayQuotes,
   setTopUpCount,
   setSelectedPreset,
   renderAmount,
   amountLoading,
   payMethods,
-  preTopUp,
+  selectPayWay,
+  onOpenTopUpConfirm,
   paymentLoading,
   payWay,
   redemptionCode,
@@ -89,6 +90,7 @@ const RechargeCard = ({
   onOpenHistory,
   enableWaffoTopUp,
   enableWechatNativeTopUp = false,
+  stripeUnitPrice = 0,
   waffoTopUp,
   waffoPayMethods,
   subscriptionLoading = false,
@@ -120,6 +122,16 @@ const RechargeCard = ({
     }
   }, [shouldShowSubscription, activeTab]);
 
+  useEffect(() => {
+    const api = onlineFormApiRef.current;
+    if (!api) return;
+    try {
+      api.setValue('topUpCount', topUpCount);
+    } catch (_) {
+      /* Form 未就绪时忽略 */
+    }
+  }, [topUpCount]);
+
   const renderPresetAmountCards = (presets) => (
     <div className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2'>
       {presets.map((preset, index) => {
@@ -130,6 +142,19 @@ const RechargeCard = ({
         const hasDiscount = discount < 1.0;
         const actualPay = discountedPrice;
         const save = originalPrice - discountedPrice;
+
+        const cardPayStripe =
+          payWay === 'stripe' &&
+          enableStripeTopUp &&
+          stripeUnitPrice > 0;
+        let stripeCardOrig = 0;
+        let stripeCardDisc = 0;
+        let stripeCardSave = 0;
+        if (cardPayStripe) {
+          stripeCardOrig = preset.value * stripeUnitPrice;
+          stripeCardDisc = stripeCardOrig * discount;
+          stripeCardSave = stripeCardOrig - stripeCardDisc;
+        }
 
         const { symbol, rate, type } = getCurrencyConfig();
         const statusStr = localStorage.getItem('status');
@@ -144,17 +169,39 @@ const RechargeCard = ({
         let displayValue = preset.value;
         let displayActualPay = actualPay;
         let displaySave = save;
+        /** CNY 模式下主副标题均为应付人民币，不再单独重复一行「实付」 */
+        let hidePresetPaySubline = false;
 
         if (type === 'USD') {
-          displayActualPay = actualPay / usdRate;
-          displaySave = save / usdRate;
+          if (cardPayStripe) {
+            displayActualPay = stripeCardDisc;
+            displaySave = stripeCardSave;
+          } else {
+            displayActualPay = actualPay;
+            displaySave = save;
+          }
+          hidePresetPaySubline = true;
         } else if (type === 'CNY') {
-          displayValue = preset.value * usdRate;
+          // 与运营价 priceRatio、/api/user/amount 一致的人民币应付；勿用「数量×美元汇率」否则与实付金额矛盾
+          displayValue = discountedPrice;
+          displayActualPay = discountedPrice;
+          displaySave = save;
+          hidePresetPaySubline = true;
         } else if (type === 'CUSTOM') {
-          displayValue = preset.value * rate;
-          displayActualPay = (actualPay / usdRate) * rate;
-          displaySave = (save / usdRate) * rate;
+          if (cardPayStripe) {
+            const r = Number(rate) || 1;
+            displayActualPay = stripeCardDisc * r;
+            displaySave = stripeCardSave * r;
+            displayValue = preset.value * stripeUnitPrice * r;
+          } else {
+            displayValue = preset.value * rate;
+            displayActualPay = (actualPay / usdRate) * rate;
+            displaySave = (save / usdRate) * rate;
+          }
+          hidePresetPaySubline = true;
         }
+
+        const presetTitleShowsPayAmount = type === 'USD' || type === 'CUSTOM';
 
         return (
           <Card
@@ -169,12 +216,15 @@ const RechargeCard = ({
               width: '100%',
             }}
             bodyStyle={{ padding: '12px' }}
-            onClick={() => {
-              selectPresetAmount(preset);
+            onClick={async () => {
+              await selectPresetAmount(preset);
               onlineFormApiRef.current?.setValue(
                 'topUpCount',
                 preset.value,
               );
+              if (onOpenTopUpConfirm) {
+                await onOpenTopUpConfirm(preset.value);
+              }
             }}
           >
             <div style={{ textAlign: 'center' }}>
@@ -183,7 +233,26 @@ const RechargeCard = ({
                 style={{ margin: '0 0 8px 0' }}
               >
                 <Coins size={18} />
-                {formatLargeNumber(displayValue)} {symbol}
+                {cardPayStripe ? (
+                  <>
+                    {Number(stripeCardDisc).toFixed(2)} USD
+                  </>
+                ) : presetTitleShowsPayAmount ? (
+                  type === 'USD' ? (
+                    <>
+                      {symbol}
+                      {Number(displayActualPay).toFixed(2)}
+                    </>
+                  ) : (
+                    <>
+                      {Number(displayActualPay).toFixed(2)} {symbol}
+                    </>
+                  )
+                ) : (
+                  <>
+                    {formatLargeNumber(displayValue)} {symbol}
+                  </>
+                )}
                 {hasDiscount && (
                   <Tag style={{ marginLeft: 4 }} color='green'>
                     {t('折').includes('off')
@@ -193,19 +262,40 @@ const RechargeCard = ({
                   </Tag>
                 )}
               </Typography.Title>
-              <div
-                style={{
-                  color: 'var(--semi-color-text-2)',
-                  fontSize: '12px',
-                  margin: '4px 0',
-                }}
-              >
-                {t('实付')} {symbol}
-                {displayActualPay.toFixed(2)}，
-                {hasDiscount
-                  ? `${t('节省')} ${symbol}${displaySave.toFixed(2)}`
-                  : `${t('节省')} ${symbol}0.00`}
-              </div>
+              {!hidePresetPaySubline && (
+                <div
+                  style={{
+                    color: 'var(--semi-color-text-2)',
+                    fontSize: '12px',
+                    margin: '4px 0',
+                  }}
+                >
+                  {t('实付')} {symbol}
+                  {displayActualPay.toFixed(2)}
+                  {type !== 'USD' ? '，' : ''}
+                  {type !== 'USD' &&
+                    (hasDiscount
+                      ? `${t('节省')} ${symbol}${displaySave.toFixed(2)}`
+                      : `${t('节省')} ${symbol}0.00`)}
+                  {type === 'USD' &&
+                    (hasDiscount
+                      ? `，${t('节省')} ${symbol}${displaySave.toFixed(2)}`
+                      : '')}
+                </div>
+              )}
+              {hidePresetPaySubline && hasDiscount && (
+                <div
+                  style={{
+                    color: 'var(--semi-color-text-2)',
+                    fontSize: '12px',
+                    margin: '4px 0',
+                  }}
+                >
+                  {cardPayStripe
+                    ? `${t('节省')} ${stripeCardSave.toFixed(2)} USD`
+                    : `${t('节省')} ${symbol}${displaySave.toFixed(2)}`}
+                </div>
+              )}
             </div>
           </Card>
         );
@@ -359,14 +449,14 @@ const RechargeCard = ({
                         if (value && value >= 1) {
                           setTopUpCount(value);
                           setSelectedPreset(null);
-                          await getAmount(value);
+                          await refreshPayQuotes(value);
                         }
                       }}
                       onBlur={(e) => {
                         const value = parseInt(e.target.value);
                         if (!value || value < 1) {
                           setTopUpCount(1);
-                          getAmount(1);
+                          void refreshPayQuotes(1);
                         }
                       }}
                       formatter={(value) => (value ? `${value}` : '')}
@@ -418,9 +508,15 @@ const RechargeCard = ({
                             const buttonEl = (
                               <Button
                                 key={payMethod.type}
-                                theme='outline'
-                                type='tertiary'
-                                onClick={() => preTopUp(payMethod.type)}
+                                theme={
+                                  payWay === payMethod.type ? 'solid' : 'outline'
+                                }
+                                type={
+                                  payWay === payMethod.type
+                                    ? 'primary'
+                                    : 'tertiary'
+                                }
+                                onClick={() => selectPayWay(payMethod.type)}
                                 disabled={disabled}
                                 loading={
                                   paymentLoading && payWay === payMethod.type
@@ -477,33 +573,48 @@ const RechargeCard = ({
               {(enableOnlineTopUp ||
                 enableStripeTopUp ||
                 enableWaffoTopUp ||
-                enableWechatNativeTopUp) && (
-                <Form.Slot
-                  label={
-                    <div className='flex items-center gap-2'>
-                      <span>{t('选择充值额度')}</span>
-                      {(() => {
-                        const { symbol, rate, type } = getCurrencyConfig();
-                        if (type === 'USD') return null;
+                enableWechatNativeTopUp) &&
+                payWay && (
+                  <Form.Slot
+                    label={
+                      <div className='flex items-center gap-2'>
+                        <span>{t('选择充值额度')}</span>
+                        {(() => {
+                          const { symbol, rate, type } = getCurrencyConfig();
+                          if (type === 'USD') return null;
 
-                        return (
-                          <span
-                            style={{
-                              color: 'var(--semi-color-text-2)',
-                              fontSize: '12px',
-                              fontWeight: 'normal',
-                            }}
-                          >
-                            (1 $ = {rate.toFixed(2)} {symbol})
-                          </span>
-                        );
-                      })()}
-                    </div>
-                  }
-                >
-                  {renderPresetAmountCards(presetAmounts)}
-                </Form.Slot>
-              )}
+                          return (
+                            <span
+                              style={{
+                                color: 'var(--semi-color-text-2)',
+                                fontSize: '12px',
+                                fontWeight: 'normal',
+                              }}
+                            >
+                              (1 $ = {rate.toFixed(2)} {symbol})
+                            </span>
+                          );
+                        })()}
+                      </div>
+                    }
+                  >
+                    {renderPresetAmountCards(presetAmounts)}
+                  </Form.Slot>
+                )}
+              {payMethods &&
+                payMethods.filter((m) => m.type !== 'waffo').length > 0 &&
+                !payWay &&
+                (enableOnlineTopUp ||
+                  enableStripeTopUp ||
+                  enableWechatNativeTopUp) && (
+                  <Text
+                    type='tertiary'
+                    size='small'
+                    className='block -mt-2 mb-1'
+                  >
+                    {t('请先选择支付方式后展示充值额度选项')}
+                  </Text>
+                )}
 
               {/* Waffo 充值区域 */}
               {enableWaffoTopUp &&

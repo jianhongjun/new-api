@@ -1070,24 +1070,36 @@ export function renderQuotaWithAmount(amount) {
   }
 
   const numericAmount = Number(amount);
-  const formattedAmount = Number.isFinite(numericAmount)
-    ? numericAmount.toFixed(2)
-    : amount;
+  if (!Number.isFinite(numericAmount)) {
+    return String(amount);
+  }
 
+  // 与 renderQuota 一致：充值数量 amount 与 USD 模式下的「美元刻度」同源，CNY/CUSTOM 仅做展示换算
   if (quotaDisplayType === 'CNY') {
-    return '¥' + formattedAmount;
-  } else if (quotaDisplayType === 'CUSTOM') {
+    const statusStr = localStorage.getItem('status');
+    let usdRate = 7;
+    try {
+      if (statusStr) {
+        const s = JSON.parse(statusStr);
+        usdRate = s?.usd_exchange_rate || 7;
+      }
+    } catch (e) {}
+    return '¥' + (numericAmount * usdRate).toFixed(2);
+  }
+  if (quotaDisplayType === 'CUSTOM') {
     const statusStr = localStorage.getItem('status');
     let symbol = '¤';
+    let rate = 1;
     try {
       if (statusStr) {
         const s = JSON.parse(statusStr);
         symbol = s?.custom_currency_symbol || symbol;
+        rate = s?.custom_currency_exchange_rate || rate;
       }
     } catch (e) {}
-    return symbol + formattedAmount;
+    return symbol + (numericAmount * rate).toFixed(2);
   }
-  return '$' + formattedAmount;
+  return '$' + numericAmount.toFixed(2);
 }
 
 /**
