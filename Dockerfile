@@ -27,7 +27,15 @@ RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$
 
 FROM debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
 
-RUN apt-get update \
+# 使用 HTTPS 源，避免 HTTP 被代理/缓存篡改导致 “invalid signature / not signed”
+RUN set -eux; \
+    for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
+      if [ -f "$f" ]; then \
+        sed -i 's|http://deb.debian.org|https://deb.debian.org|g' "$f"; \
+        sed -i 's|http://security.debian.org|https://security.debian.org|g' "$f"; \
+      fi; \
+    done; \
+    apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
