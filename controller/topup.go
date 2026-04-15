@@ -98,9 +98,19 @@ func GetTopUpInfo(c *gin.Context) {
 		}
 	}
 
+	// 关闭通用充值时，不向客户端返回易支付类支付方式（避免界面仍显示支付宝/微信通道等）
+	if !operation_setting.OnlineTopUpEnabled {
+		payMethods = lo.Filter(payMethods, func(m map[string]string, _ int) bool {
+			typ := m["type"]
+			return typ == "stripe" || typ == "waffo" || typ == PaymentMethodWechatNative
+		})
+	}
+
 	data := gin.H{
-		"enable_online_topup":        operation_setting.PayAddress != "" && operation_setting.EpayId != "" && operation_setting.EpayKey != "",
+		"enable_online_topup":        operation_setting.OnlineEpayTopUpConfigured(),
 		"enable_stripe_topup":        setting.StripeApiSecret != "" && setting.StripeWebhookSecret != "" && setting.StripePriceId != "",
+		// 与 /api/status、Stripe 扣款公式一致，供充值页在全局 status 未就绪时仍能展示与实付一致的卡面美元价
+		"stripe_unit_price": setting.StripeUnitPrice,
 		"enable_creem_topup":         setting.CreemApiKey != "" && setting.CreemProducts != "[]",
 		"enable_waffo_topup":         enableWaffo,
 		"enable_wechat_native_topup": enableWechatNative,
@@ -186,6 +196,10 @@ func getMinTopup() int64 {
 }
 
 func RequestEpay(c *gin.Context) {
+	if !operation_setting.OnlineTopUpEnabled {
+		c.JSON(200, gin.H{"message": "error", "data": "管理员已关闭通用充值"})
+		return
+	}
 	var req EpayRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {

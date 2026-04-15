@@ -1,7 +1,7 @@
 # New-API Docker Compose Configuration
-# 
-# Quick Start:
-#   1. docker-compose up -d
+#
+# Quick Start (build from local Dockerfile in this directory):
+#   1. docker compose up -d --build
 #   2. Access at http://localhost:3000
 #
 # Using MySQL instead of PostgreSQL:
@@ -15,7 +15,10 @@
 #version: '3.4' # For compatibility with older Docker versions
 services:
   new-api:
-    image: calciumion/new-api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: new-api:local
     container_name: new-api
     restart: always
     command: --log-dir /app/logs
@@ -29,9 +32,9 @@ services:
       - ./data:/data
       - ./logs:/app/logs
     environment:
-      - SQL_DSN=postgresql://root:123456@host.docker.internal:5432/new-api # ⚠️ IMPORTANT: Change the password in production!
+#      - SQL_DSN=postgresql://root:123456@host.docker.internal:5432/new-api # ⚠️ IMPORTANT: Change the password in production!
 #      - SQL_DSN=root:123456@tcp(mysql:3306)/new-api  # Point to the mysql service, uncomment if using MySQL
-      - REDIS_CONN_STRING=redis://host.docker.internal:6379
+#      - REDIS_CONN_STRING=redis://host.docker.internal:6379
       - TZ=Asia/Shanghai
       - ERROR_LOG_ENABLED=true # 是否启用错误日志记录 (Whether to enable error log recording)
       - BATCH_UPDATE_ENABLED=true  # 是否启用批量更新 (Whether to enable batch update)

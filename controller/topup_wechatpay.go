@@ -101,6 +101,53 @@ func wechatPayNotifyURL() string {
 	return u.String()
 }
 
+// tryCompleteWechatNativeTopUp 根据微信返回的订单详情，将待支付 Native 订单置为成功并入账（幂等）。
+// 若 content 非 SUCCESS，直接返回（无 reject、无 err）。
+// clientReject 非空表示业务上不能接受该笔支付（回调应回复 FAIL）；err 表示落库失败（回调应 500 重试）。
+// 调用方须已持有 LockOrder(topUp.TradeNo)。
+func tryCompleteWechatNativeTopUp(topUp *model.TopUp, content *payments.Transaction) (clientReject string, err error) {
+	if content == nil {
+		return "missing transaction", nil
+	}
+	if content.TradeState == nil || *content.TradeState != "SUCCESS" {
+		return "", nil
+	}
+	if content.OutTradeNo == nil || *content.OutTradeNo != topUp.TradeNo {
+		return "out_trade_no mismatch", nil
+	}
+	if topUp.PaymentMethod != PaymentMethodWechatNative {
+		return "bad payment method", nil
+	}
+	if content.Amount == nil || content.Amount.Total == nil {
+		return "missing amount", nil
+	}
+	if content.Amount.Currency != nil && *content.Amount.Currency != "" && *content.Amount.Currency != "CNY" {
+		return "invalid currency", nil
+	}
+	expectedFen := decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+	if *content.Amount.Total != expectedFen {
+		log.Printf("wechat topup amount mismatch trade=%s want=%d got=%d", topUp.TradeNo, expectedFen, *content.Amount.Total)
+		return "amount mismatch", nil
+	}
+	if topUp.Status != common.TopUpStatusPending {
+		return "", nil
+	}
+	topUp.Status = common.TopUpStatusSuccess
+	topUp.CompleteTime = common.GetTimestamp()
+	if err := topUp.Update(); err != nil {
+		return "", fmt.Errorf("update order: %w", err)
+	}
+	dAmount := decimal.NewFromInt(int64(topUp.Amount))
+	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+	quotaToAdd := int(dAmount.Mul(dQuotaPerUnit).IntPart())
+	if err := model.IncreaseUserQuota(topUp.UserId, quotaToAdd, true); err != nil {
+		return "", fmt.Errorf("quota: %w", err)
+	}
+	log.Printf("wechat native topup success %v", topUp)
+	model.RecordLog(topUp.UserId, model.LogTypeTopup, fmt.Sprintf("使用微信 Native 充值成功，充值金额: %v，支付金额（元）: %f", logger.LogQuota(quotaToAdd), topUp.Money))
+	return "", nil
+}
+
 // RequestWechatPayNative 微信 Native 下单，返回 code_url（人民币，与 getPayMoney 一致）
 func RequestWechatPayNative(c *gin.Context) {
 	if !setting.WechatPayNativeEnabled || !setting.WechatPayNativeReady() {
@@ -209,6 +256,106 @@ func RequestWechatPayNative(c *gin.Context) {
 	})
 }
 
+// GetWechatNativeTopUpOrder 查询当前用户微信 Native 充值订单状态（供前端轮询）。
+// 若本地仍为 pending，主动向微信支付查单并对账，避免仅依赖异步通知导致长时间不到账。
+func GetWechatNativeTopUpOrder(c *gin.Context) {
+	tradeNo := c.Query("trade_no")
+	if tradeNo == "" {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "参数错误"})
+		return
+	}
+	userId := c.GetInt("id")
+	topUp := model.GetTopUpByTradeNo(tradeNo)
+	if topUp == nil || topUp.UserId != userId || topUp.PaymentMethod != PaymentMethodWechatNative {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "订单不存在"})
+		return
+	}
+	if topUp.Status != common.TopUpStatusPending {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"status": topUp.Status,
+			},
+		})
+		return
+	}
+	if !setting.WechatPayNativeReady() {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"status": topUp.Status,
+			},
+		})
+		return
+	}
+
+	LockOrder(tradeNo)
+	defer UnlockOrder(tradeNo)
+
+	topUp = model.GetTopUpByTradeNo(tradeNo)
+	if topUp == nil || topUp.UserId != userId || topUp.PaymentMethod != PaymentMethodWechatNative {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "订单不存在"})
+		return
+	}
+	if topUp.Status != common.TopUpStatusPending {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"status": topUp.Status,
+			},
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+	client, err := newWechatPayClient(ctx)
+	if err != nil {
+		log.Printf("wechat query order client trade=%s: %v", tradeNo, err)
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"status": topUp.Status,
+			},
+		})
+		return
+	}
+	svc := native.NativeApiService{Client: client}
+	txn, _, qErr := svc.QueryOrderByOutTradeNo(ctx, native.QueryOrderByOutTradeNoRequest{
+		OutTradeNo: core.String(tradeNo),
+		Mchid:      core.String(setting.WechatPayMchId),
+	})
+	if qErr != nil {
+		log.Printf("wechat query order trade=%s: %v", tradeNo, qErr)
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"status": topUp.Status,
+			},
+		})
+		return
+	}
+
+	reject, compErr := tryCompleteWechatNativeTopUp(topUp, txn)
+	if reject != "" {
+		log.Printf("wechat reconcile reject trade=%s: %s", tradeNo, reject)
+	}
+	if compErr != nil {
+		log.Printf("wechat reconcile trade=%s: %v", tradeNo, compErr)
+	}
+
+	topUp = model.GetTopUpByTradeNo(tradeNo)
+	if topUp == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "订单不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"status": topUp.Status,
+		},
+	})
+}
+
 // WechatPayNotify 微信支付结果通知（APIv3）
 func WechatPayNotify(c *gin.Context) {
 	if !setting.WechatPayNativeReady() {
@@ -267,42 +414,16 @@ func WechatPayNotify(c *gin.Context) {
 		writeWechatNotifyFail(c, "order not found")
 		return
 	}
-	if topUp.PaymentMethod != PaymentMethodWechatNative {
-		writeWechatNotifyFail(c, "bad payment method")
-		return
-	}
-	if content.Amount == nil || content.Amount.Total == nil {
-		writeWechatNotifyFail(c, "missing amount")
-		return
-	}
-	if content.Amount.Currency != nil && *content.Amount.Currency != "" && *content.Amount.Currency != "CNY" {
-		writeWechatNotifyFail(c, "invalid currency")
-		return
-	}
-	expectedFen := decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromInt(100)).Round(0).IntPart()
-	if *content.Amount.Total != expectedFen {
-		log.Printf("wechat notify amount mismatch trade=%s want=%d got=%d", outNo, expectedFen, *content.Amount.Total)
-		writeWechatNotifyFail(c, "amount mismatch")
-		return
-	}
 
-	if topUp.Status == common.TopUpStatusPending {
-		topUp.Status = common.TopUpStatusSuccess
-		if err := topUp.Update(); err != nil {
-			log.Printf("wechat notify update order: %v", err)
-			c.Status(http.StatusInternalServerError)
-			return
-		}
-		dAmount := decimal.NewFromInt(int64(topUp.Amount))
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-		quotaToAdd := int(dAmount.Mul(dQuotaPerUnit).IntPart())
-		if err := model.IncreaseUserQuota(topUp.UserId, quotaToAdd, true); err != nil {
-			log.Printf("wechat notify quota: %v", err)
-			c.Status(http.StatusInternalServerError)
-			return
-		}
-		log.Printf("wechat notify success %v", topUp)
-		model.RecordLog(topUp.UserId, model.LogTypeTopup, fmt.Sprintf("使用微信 Native 充值成功，充值金额: %v，支付金额（元）: %f", logger.LogQuota(quotaToAdd), topUp.Money))
+	reject, err := tryCompleteWechatNativeTopUp(topUp, content)
+	if reject != "" {
+		writeWechatNotifyFail(c, reject)
+		return
+	}
+	if err != nil {
+		log.Printf("wechat notify complete: %v", err)
+		c.Status(http.StatusInternalServerError)
+		return
 	}
 
 	writeWechatNotifyOK(c)

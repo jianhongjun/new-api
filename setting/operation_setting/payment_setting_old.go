@@ -9,6 +9,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 )
 
+// OnlineTopUpEnabled 为 false 时，用户端不可用易支付（通用充值）；不影响 Stripe / 微信支付 Native 等。
+var OnlineTopUpEnabled = true
+
 var PayAddress = ""
 var CustomCallbackAddress = ""
 var EpayId = ""
@@ -56,4 +59,9 @@ func ContainsPayMethod(method string) bool {
 		}
 	}
 	return false
+}
+
+// OnlineEpayTopUpConfigured 表示易支付（通用充值）是否对用户开放。
+func OnlineEpayTopUpConfigured() bool {
+	return OnlineTopUpEnabled && PayAddress != "" && EpayId != "" && EpayKey != ""
 }

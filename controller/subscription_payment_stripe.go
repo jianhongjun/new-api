@@ -121,11 +121,12 @@ func genStripeSubscriptionLink(referenceId string, customerId string, email stri
 		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
 	}
 
-	if "" == customerId {
-		if "" != email {
+	// subscription 模式下不可使用 customer_creation（仅 payment 模式支持）。
+	// 无 Stripe Customer 时传 CustomerEmail，Checkout 会在订阅流程中创建客户。
+	if customerId == "" {
+		if email != "" {
 			params.CustomerEmail = stripe.String(email)
 		}
-		params.CustomerCreation = stripe.String(string(stripe.CheckoutSessionCustomerCreationAlways))
 	} else {
 		params.Customer = stripe.String(customerId)
 	}

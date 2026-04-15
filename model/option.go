@@ -77,6 +77,7 @@ func InitOptionMap() {
 	common.OptionMap["CustomCallbackAddress"] = ""
 	common.OptionMap["EpayId"] = ""
 	common.OptionMap["EpayKey"] = ""
+	common.OptionMap["OnlineTopUpEnabled"] = strconv.FormatBool(operation_setting.OnlineTopUpEnabled)
 	common.OptionMap["Price"] = strconv.FormatFloat(operation_setting.Price, 'f', -1, 64)
 	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
 	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
@@ -326,6 +327,8 @@ func updateOptionMap(key string, value string) (err error) {
 			ratio_setting.SetExposeRatioEnabled(boolValue)
 		case "WechatPayNativeEnabled":
 			setting.WechatPayNativeEnabled = boolValue
+		case "OnlineTopUpEnabled":
+			operation_setting.OnlineTopUpEnabled = boolValue
 		}
 	}
 	switch key {
