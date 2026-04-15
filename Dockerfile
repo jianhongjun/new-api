@@ -34,23 +34,12 @@ COPY --from=ssl-bootstrap /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-c
 
 # 可选：换 Debian 源（须与 bookworm 目录结构一致），例：
 #   --build-arg DEBIAN_APT_DEB=http://mirrors.aliyun.com/debian --build-arg DEBIAN_APT_SEC=http://mirrors.aliyun.com/debian-security
-# 随后会把常见源的 http 升为 https（在已有 CA 的前提下），仍失败多为公司解密/代理需单独处理。
+# 下面会删掉镜像自带 deb822，避免 sed 残留重复条目；再把常见主机 http→https（dash/sh 下用 echo|sed 处理变量）。
 ARG DEBIAN_APT_DEB=http://deb.debian.org/debian
 ARG DEBIAN_APT_SEC=http://deb.debian.org/debian-security
 RUN set -eux; \
-    printf '%s\n' \
-      'Acquire::http::Pipeline-Depth "0";' \
-      'Acquire::https::Pipeline-Depth "0";' \
-      > /etc/apt/apt.conf.d/99nopipeline; \
-    for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
-      [ -f "$f" ] || continue; \
-      sed -i "s|https://security.debian.org/debian-security|${DEBIAN_APT_SEC}|g" "$f"; \
-      sed -i "s|http://security.debian.org/debian-security|${DEBIAN_APT_SEC}|g" "$f"; \
-      sed -i "s|https://deb.debian.org/debian-security|${DEBIAN_APT_SEC}|g" "$f"; \
-      sed -i "s|http://deb.debian.org/debian-security|${DEBIAN_APT_SEC}|g" "$f"; \
-      sed -i "s|https://deb.debian.org/debian|${DEBIAN_APT_DEB}|g" "$f"; \
-      sed -i "s|http://deb.debian.org/debian|${DEBIAN_APT_DEB}|g" "$f"; \
-    done; \
+    DEB_URI="${DEBIAN_APT_DEB}"; \
+    SEC_URI="${DEBIAN_APT_SEC}"; \
     for h in \
       deb.debian.org \
       security.debian.org \
@@ -59,13 +48,39 @@ RUN set -eux; \
       mirrors.huaweicloud.com \
       repo.huaweicloud.com \
       ; do \
-      for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
-        [ -f "$f" ] || continue; \
-        sed -i "s|http://${h}|https://${h}|g" "$f"; \
-      done; \
+      DEB_URI=$(echo "$DEB_URI" | sed "s|http://${h}|https://${h}|g"); \
+      SEC_URI=$(echo "$SEC_URI" | sed "s|http://${h}|https://${h}|g"); \
     done; \
-    apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget \
+    rm -f /etc/apt/sources.list; \
+    rm -f /etc/apt/sources.list.d/debian.sources; \
+    printf '%s\n' \
+      'Types: deb' \
+      "URIs: ${DEB_URI}" \
+      'Suites: bookworm bookworm-updates' \
+      'Components: main' \
+      'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+      '' \
+      'Types: deb' \
+      "URIs: ${SEC_URI}" \
+      'Suites: bookworm-security' \
+      'Components: main' \
+      'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+      > /etc/apt/sources.list.d/debian.sources; \
+    printf '%s\n' \
+      'Acquire::http::Pipeline-Depth "0";' \
+      'Acquire::https::Pipeline-Depth "0";' \
+      'Acquire::Check-Valid-Until "false";' \
+      'Acquire::Retries "5";' \
+      'Acquire::http::Timeout "120";' \
+      'Acquire::https::Timeout "120";' \
+      > /etc/apt/apt.conf.d/99nopipeline; \
+    i=0; \
+    until apt-get update; do \
+      i=$((i+1)); \
+      if [ "$i" -ge 4 ]; then exit 1; fi; \
+      sleep 5; \
+    done; \
+    apt-get install -y --no-install-recommends ca-certificates tzdata wget \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 
