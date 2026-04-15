@@ -27,16 +27,19 @@ RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$
 
 FROM debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
 
-# 使用 HTTPS 源，避免 HTTP 被代理/缓存篡改导致 “invalid signature / not signed”
+# bookworm-slim 未装 ca-certificates 前，apt 无法用 TLS 校验官方 HTTPS 源（鸡生蛋）。
+# 先用默认 HTTP 更新并安装 CA，再改 HTTPS 并二次 update，兼顾「装包成功」与「降低 InRelease 被篡改」风险。
 RUN set -eux; \
-    for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
-      if [ -f "$f" ]; then \
-        sed -i 's|http://deb.debian.org|https://deb.debian.org|g' "$f"; \
-        sed -i 's|http://security.debian.org|https://security.debian.org|g' "$f"; \
-      fi; \
-    done; \
     apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
+         if [ -f "$f" ]; then \
+           sed -i 's|http://deb.debian.org|https://deb.debian.org|g' "$f"; \
+           sed -i 's|http://security.debian.org|https://security.debian.org|g' "$f"; \
+         fi; \
+       done \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends tzdata libasan8 wget \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 
